@@ -44,4 +44,23 @@ def train(args):
 
 if __name__ == '__main__':
     args = get_args()
+        # ============ 训练配置 ============
+    # 任务名称：指定要训练的机器人类型
+    args.task = 'a1'  # 可选: "go1", "go2", "g1", "h1", "h1_2", "l3"
+    
+    # 并行环境数量：
+    # - 4096: 推荐，显存占用约7GB，训练速度快
+    # - 2048: 显存不足时可降低，训练时间会增加
+    # - 更多环境可以提高样本多样性，但需要更多GPU资源
+    args.num_envs = 4096
+    
+    # 可视化设置：
+    # - False: 开启显示，可以观察训练过程，但会降低训练速度
+    # - True: 关闭显示（无头模式），训练速度更快，推荐用于正式训练
+    args.headless = True
+    
+    # 是否恢复训练：
+    # - False: 从头开始新训练
+    # - True: 从最近的检查点恢复训练，需要指定 load_run 和 checkpoint
+    args.resume = True
     train(args)
