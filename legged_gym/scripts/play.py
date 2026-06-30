@@ -94,7 +94,8 @@ def play(args):
         if i < stop_state_log:
             logger.log_states(
                 {
-                    'dof_pos_target': actions[robot_index, joint_index].item() * env.cfg.control.action_scale,
+                    'dof_pos_target': actions[robot_index, joint_index].item() * env.cfg.control.action_scale
+                        + env.default_dof_pos[0, joint_index].item(),
                     'dof_pos': env.dof_pos[robot_index, joint_index].item(),
                     'dof_vel': env.dof_vel[robot_index, joint_index].item(),
                     'dof_torque': env.torques[robot_index, joint_index].item(),
@@ -123,5 +124,8 @@ if __name__ == '__main__':
     RECORD_FRAMES = False
     MOVE_CAMERA = False
     args = get_args()
-    args.task = "a1"
+    # 任务名称：未通过 --task 指定时默认推理 a1
+    #   可选: "a1", "a1_amp", "chitu", "chitu_amp"
+    #   用法: python play.py --task chitu_amp
+    args.task = args.task or "chitu_amp"
     play(args)

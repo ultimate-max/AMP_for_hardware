@@ -74,7 +74,8 @@ class AMPOnPolicyRunner:
         amp_data = AMPLoader(
             device, time_between_frames=self.env.dt, preload_transitions=True,
             num_preload_transitions=train_cfg['runner']['amp_num_preload_transitions'],
-            motion_files=self.cfg["amp_motion_files"])
+            motion_files=self.cfg["amp_motion_files"],
+            joint_reorder=train_cfg['runner'].get('amp_joint_reorder', 'a1'))
         amp_normalizer = Normalizer(amp_data.observation_dim)
         discriminator = AMPDiscriminator(
             amp_data.observation_dim * 2,
@@ -170,11 +171,12 @@ class AMPOnPolicyRunner:
             if self.log_dir is not None:
                 self.log(locals())
             if it % self.save_interval == 0:
-                self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(it)))
+                self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(it)), current_iter=it)
             ep_infos.clear()
-        
+
         self.current_learning_iteration += num_learning_iterations
-        self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(self.current_learning_iteration)))
+        self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(self.current_learning_iteration)),
+                  current_iter=self.current_learning_iteration)
 
     def log(self, locs, width=80, pad=35):
         self.tot_timesteps += self.num_steps_per_env * self.env.num_envs
@@ -251,13 +253,13 @@ class AMPOnPolicyRunner:
                                locs['num_learning_iterations'] - locs['it']):.1f}s\n""")
         print(log_string)
 
-    def save(self, path, infos=None):
+    def save(self, path, infos=None, current_iter=None):
         torch.save({
             'model_state_dict': self.alg.actor_critic.state_dict(),
             'optimizer_state_dict': self.alg.optimizer.state_dict(),
             'discriminator_state_dict': self.alg.discriminator.state_dict(),
             'amp_normalizer': self.alg.amp_normalizer,
-            'iter': self.current_learning_iteration,
+            'iter': current_iter if current_iter is not None else self.current_learning_iteration,
             'infos': infos,
             }, path)
 
@@ -269,6 +271,11 @@ class AMPOnPolicyRunner:
         if load_optimizer:
             self.alg.optimizer.load_state_dict(loaded_dict['optimizer_state_dict'])
         self.current_learning_iteration = loaded_dict['iter']
+        if self.current_learning_iteration == 0:
+            import re
+            match = re.search(r'model_(\d+)\.pt', path)
+            if match:
+                self.current_learning_iteration = int(match.group(1))
         return loaded_dict['infos']
 
     def get_inference_policy(self, device=None):

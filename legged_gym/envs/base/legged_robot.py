@@ -80,6 +80,8 @@ class LeggedRobot(BaseTask):
         self._parse_cfg(self.cfg)
         super().__init__(self.cfg, sim_params, physics_engine, sim_device, headless)
 
+        self.use_sim_foot_pos = getattr(self.cfg.env, 'amp_use_sim_foot_pos', False)
+
         if not self.headless:
             self.set_camera(self.cfg.viewer.pos, self.cfg.viewer.lookat)
         self._init_buffers()
@@ -87,16 +89,35 @@ class LeggedRobot(BaseTask):
         self.init_done = True
 
         if self.cfg.env.reference_state_initialization:
-            self.amp_loader = AMPLoader(motion_files=self.cfg.env.amp_motion_files, device=self.device, time_between_frames=self.dt)
+            self.amp_loader = AMPLoader(
+                motion_files=self.cfg.env.amp_motion_files,
+                device=self.device,
+                time_between_frames=self.dt,
+                joint_reorder=self.cfg.env.amp_joint_reorder,
+            )
+
+    def _pd_hold_actions(self, env_ids=None):
+        """Actions that make PD target match current dof_pos (for AMP mocap reset)."""
+        if env_ids is None:
+            dof_pos = self.dof_pos
+        else:
+            dof_pos = self.dof_pos[env_ids]
+        default = self.default_dof_pos
+        if env_ids is not None:
+            default = default.expand(len(env_ids), -1)
+        return (dof_pos - default) / self.cfg.control.action_scale
 
     def reset(self):
         """ Reset all robots"""
-        self.reset_idx(torch.arange(self.num_envs, device=self.device))
+        env_ids = torch.arange(self.num_envs, device=self.device)
+        self.reset_idx(env_ids)
         if self.cfg.env.include_history_steps is not None:
-            self.obs_buf_history.reset(
-                torch.arange(self.num_envs, device=self.device),
-                self.obs_buf[torch.arange(self.num_envs, device=self.device)])
-        obs, privileged_obs, _, _, _, _, _ = self.step(torch.zeros(self.num_envs, self.num_actions, device=self.device, requires_grad=False))
+            self.obs_buf_history.reset(env_ids, self.obs_buf[env_ids])
+        if self.cfg.env.reference_state_initialization:
+            init_actions = self._pd_hold_actions()
+        else:
+            init_actions = torch.zeros(self.num_envs, self.num_actions, device=self.device, requires_grad=False)
+        obs, privileged_obs, _, _, _, _, _ = self.step(init_actions)
         return obs, privileged_obs
 
     def step(self, actions):
@@ -146,6 +167,8 @@ class LeggedRobot(BaseTask):
         """
         self.gym.refresh_actor_root_state_tensor(self.sim)
         self.gym.refresh_net_contact_force_tensor(self.sim)
+        if self.use_sim_foot_pos:
+            self.gym.refresh_rigid_body_state_tensor(self.sim)
 
         self.episode_length_buf += 1
         self.common_step_counter += 1
@@ -218,7 +241,12 @@ class LeggedRobot(BaseTask):
             self.randomized_d_gains[env_ids] = new_randomized_gains[1]
 
         # reset buffers
-        self.last_actions[env_ids] = 0.
+        if self.cfg.env.reference_state_initialization:
+            hold_actions = self._pd_hold_actions(env_ids)
+            self.actions[env_ids] = hold_actions
+            self.last_actions[env_ids] = hold_actions
+        else:
+            self.last_actions[env_ids] = 0.
         self.last_dof_vel[env_ids] = 0.
         self.feet_air_time[env_ids] = 0.
         self.episode_length_buf[env_ids] = 0
@@ -284,7 +312,10 @@ class LeggedRobot(BaseTask):
 
     def get_amp_observations(self):
         joint_pos = self.dof_pos
-        foot_pos = self.foot_positions_in_base_frame(self.dof_pos).to(self.device)
+        if self.use_sim_foot_pos:
+            foot_pos = self.foot_positions_in_base_frame_from_sim()
+        else:
+            foot_pos = self.foot_positions_in_base_frame(self.dof_pos).to(self.device)
         base_lin_vel = self.base_lin_vel
         base_ang_vel = self.base_ang_vel
         joint_vel = self.dof_vel
@@ -368,6 +399,8 @@ class LeggedRobot(BaseTask):
                 r = self.dof_pos_limits[i, 1] - self.dof_pos_limits[i, 0]
                 self.dof_pos_limits[i, 0] = m - 0.5 * r * self.cfg.rewards.soft_dof_pos_limit
                 self.dof_pos_limits[i, 1] = m + 0.5 * r * self.cfg.rewards.soft_dof_pos_limit
+        if self.cfg.asset.joint_friction > 0.:
+            props["friction"][:] = self.cfg.asset.joint_friction
         return props
 
     def _process_rigid_body_props(self, props, env_id):
@@ -586,7 +619,9 @@ class LeggedRobot(BaseTask):
         noise_vec[24:36] = noise_scales.dof_vel * noise_level * self.obs_scales.dof_vel
         noise_vec[36:48] = 0. # previous actions
         if self.cfg.terrain.measure_heights:
-            noise_vec[48:235] = noise_scales.height_measurements* noise_level * self.obs_scales.height_measurements
+            height_dim = noise_vec.shape[0] - 48
+            if height_dim > 0:
+                noise_vec[48:] = noise_scales.height_measurements * noise_level * self.obs_scales.height_measurements
         return noise_vec
 
     #----------------------------------------
@@ -656,6 +691,11 @@ class LeggedRobot(BaseTask):
         if self.cfg.domain_rand.randomize_gains:
             self.randomized_p_gains, self.randomized_d_gains = self.compute_randomized_gains(self.num_envs)
 
+        if self.use_sim_foot_pos:
+            rigid_body_state = self.gym.acquire_rigid_body_state_tensor(self.sim)
+            self.rigid_body_states = gymtorch.wrap_tensor(rigid_body_state)
+            self.rigid_body_states = self.rigid_body_states.view(self.num_envs, self.num_bodies, 13)
+
     def compute_randomized_gains(self, num_envs):
         p_mult = ((
             self.cfg.domain_rand.stiffness_multiplier_range[0] -
@@ -696,6 +736,16 @@ class LeggedRobot(BaseTask):
                 self.foot_position_in_hip_frame(foot_angles[:, i * 3: i * 3 + 3], l_hip_sign=(-1)**(i)))
         foot_positions = foot_positions + HIP_OFFSETS.reshape(12,).to(self.device)
         return foot_positions
+
+    def foot_positions_in_base_frame_from_sim(self):
+        """Foot positions in base frame from rigid-body states (for non-A1 robots)."""
+        base_pos = self.root_states[:, :3]
+        foot_pos = torch.zeros(self.num_envs, 12, device=self.device, dtype=torch.float)
+        for i in range(len(self.feet_indices)):
+            foot_world = self.rigid_body_states[:, self.feet_indices[i], :3]
+            foot_pos[:, i * 3:i * 3 + 3] = quat_rotate_inverse(
+                self.base_quat, foot_world - base_pos)
+        return foot_pos
 
     def _prepare_reward_function(self):
         """ Prepares a list of reward functions, whcih will be called to compute the total reward.

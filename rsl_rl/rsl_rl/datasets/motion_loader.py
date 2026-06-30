@@ -55,13 +55,18 @@ class AMPLoader:
             preload_transitions=False,
             num_preload_transitions=1000000,
             motion_files=glob.glob('datasets/motion_files2/*'),
+            joint_reorder='a1',
             ):
         """Expert dataset provides AMP observations from Dog mocap dataset.
 
         time_between_frames: Amount of time in seconds between transition.
+        joint_reorder: 'a1' maps PyBullet [FR,FL,RR,RL] to Isaac A1 [FL,FR,RL,RR];
+            'chitu' maps the same PyBullet file order to Chitu URDF [LF,LH,RF,RH];
+            'none' skips leg-block reordering (file already matches URDF).
         """
         self.device = device
         self.time_between_frames = time_between_frames
+        self.joint_reorder = joint_reorder
         
         # Values to store for each trajectory.
         self.trajectories = []
@@ -78,7 +83,7 @@ class AMPLoader:
             with open(motion_file, "r") as f:
                 motion_json = json.load(f)
                 motion_data = np.array(motion_json["Frames"])
-                motion_data = self.reorder_from_pybullet_to_isaac(motion_data)
+                motion_data = self.reorder_joints(motion_data)
 
                 # Normalize and standardize quaternions.
                 for f_i in range(motion_data.shape[0]):
@@ -130,33 +135,69 @@ class AMPLoader:
 
         self.all_trajectories_full = torch.vstack(self.trajectories_full)
 
+    def reorder_joints(self, motion_data):
+        if self.joint_reorder == 'none':
+            return motion_data
+        if self.joint_reorder == 'chitu':
+            return self.reorder_from_amp_mocap_to_chitu(motion_data)
+        if self.joint_reorder != 'a1':
+            raise ValueError(
+                f"Unknown joint_reorder '{self.joint_reorder}', expected 'a1', 'chitu', or 'none'")
+        return self.reorder_from_pybullet_to_isaac(motion_data)
+
+    @staticmethod
+    def _permute_leg_blocks(values, leg_permutation):
+        """Permute (N, 12) arrays stored as four 3-DoF leg blocks."""
+        blocks = np.split(values, 4, axis=1)
+        return np.hstack([blocks[i] for i in leg_permutation])
+
     def reorder_from_pybullet_to_isaac(self, motion_data):
-        """Convert from PyBullet ordering to Isaac ordering.
+        """Convert from PyBullet ordering to Isaac A1 ordering.
 
         Rearranges leg and joint order from PyBullet [FR, FL, RR, RL] to
-        IsaacGym order [FL, FR, RL, RR].
+        IsaacGym A1 order [FL, FR, RL, RR].
         """
         root_pos = AMPLoader.get_root_pos_batch(motion_data)
         root_rot = AMPLoader.get_root_rot_batch(motion_data)
 
-        jp_fr, jp_fl, jp_rr, jp_rl = np.split(
-            AMPLoader.get_joint_pose_batch(motion_data), 4, axis=1)
-        joint_pos = np.hstack([jp_fl, jp_fr, jp_rl, jp_rr])
-    
-        fp_fr, fp_fl, fp_rr, fp_rl = np.split(
-            AMPLoader.get_tar_toe_pos_local_batch(motion_data), 4, axis=1)
-        foot_pos = np.hstack([fp_fl, fp_fr, fp_rl, fp_rr])
+        joint_pos = self._permute_leg_blocks(
+            AMPLoader.get_joint_pose_batch(motion_data), [1, 0, 3, 2])
+        foot_pos = self._permute_leg_blocks(
+            AMPLoader.get_tar_toe_pos_local_batch(motion_data), [1, 0, 3, 2])
 
         lin_vel = AMPLoader.get_linear_vel_batch(motion_data)
         ang_vel = AMPLoader.get_angular_vel_batch(motion_data)
 
-        jv_fr, jv_fl, jv_rr, jv_rl = np.split(
-            AMPLoader.get_joint_vel_batch(motion_data), 4, axis=1)
-        joint_vel = np.hstack([jv_fl, jv_fr, jv_rl, jv_rr])
+        joint_vel = self._permute_leg_blocks(
+            AMPLoader.get_joint_vel_batch(motion_data), [1, 0, 3, 2])
+        foot_vel = self._permute_leg_blocks(
+            AMPLoader.get_tar_toe_vel_local_batch(motion_data), [1, 0, 3, 2])
 
-        fv_fr, fv_fl, fv_rr, fv_rl = np.split(
-            AMPLoader.get_tar_toe_vel_local_batch(motion_data), 4, axis=1)
-        foot_vel = np.hstack([fv_fl, fv_fr, fv_rl, fv_rr])
+        return np.hstack(
+            [root_pos, root_rot, joint_pos, foot_pos, lin_vel, ang_vel,
+             joint_vel, foot_vel])
+
+    def reorder_from_amp_mocap_to_chitu(self, motion_data):
+        """Map PyBullet AMP file order to Chitu Isaac Gym DOF order.
+
+        Input leg order (same as A1 mocap files): [FR, FL, RR, RL].
+        Chitu URDF / OCS2 order: [LF, LH, RF, RH].
+        """
+        root_pos = AMPLoader.get_root_pos_batch(motion_data)
+        root_rot = AMPLoader.get_root_rot_batch(motion_data)
+
+        joint_pos = self._permute_leg_blocks(
+            AMPLoader.get_joint_pose_batch(motion_data), [1, 3, 0, 2])
+        foot_pos = self._permute_leg_blocks(
+            AMPLoader.get_tar_toe_pos_local_batch(motion_data), [1, 3, 0, 2])
+
+        lin_vel = AMPLoader.get_linear_vel_batch(motion_data)
+        ang_vel = AMPLoader.get_angular_vel_batch(motion_data)
+
+        joint_vel = self._permute_leg_blocks(
+            AMPLoader.get_joint_vel_batch(motion_data), [1, 3, 0, 2])
+        foot_vel = self._permute_leg_blocks(
+            AMPLoader.get_tar_toe_vel_local_batch(motion_data), [1, 3, 0, 2])
 
         return np.hstack(
             [root_pos, root_rot, joint_pos, foot_pos, lin_vel, ang_vel,

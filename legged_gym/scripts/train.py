@@ -40,27 +40,44 @@ import torch
 def train(args):
     env, env_cfg = task_registry.make_env(name=args.task, args=args)
     ppo_runner, train_cfg = task_registry.make_alg_runner(env=env, name=args.task, args=args)
-    ppo_runner.learn(num_learning_iterations=train_cfg.runner.max_iterations, init_at_random_ep_len=True)
+    # 续训时不要随机打乱 episode 进度，避免恢复后短期奖励抖动
+    init_random = not train_cfg.runner.resume
+    ppo_runner.learn(num_learning_iterations=train_cfg.runner.max_iterations,
+                     init_at_random_ep_len=init_random)
 
 if __name__ == '__main__':
     args = get_args()
-        # ============ 训练配置 ============
-    # 任务名称：指定要训练的机器人类型
-    args.task = 'a1'  # 可选: "go1", "go2", "g1", "h1", "h1_2", "l3"
-    
-    # 并行环境数量：
+    # ============ 训练配置（可通过命令行参数覆盖）============
+    # 任务名称：未通过 --task 指定时默认训练 a1
+    #   可选: "a1", "a1_amp", "chitu", "chitu_amp"
+    #   用法: python train.py --task chitu_amp
+    args.task = args.task or 'chitu_amp'
+
+    # 并行环境数量：未通过 --num_envs 指定时默认 4096
     # - 4096: 推荐，显存占用约7GB，训练速度快
     # - 2048: 显存不足时可降低，训练时间会增加
-    # - 更多环境可以提高样本多样性，但需要更多GPU资源
-    args.num_envs = 4096
-    
+    if args.num_envs is None:
+        args.num_envs = 4096
+
+    # 地形：chitu rough 与 A1 相同，继承 LeggedRobotCfg 默认 trimesh；平地请改 chitu_config.py
+
     # 可视化设置：
-    # - False: 开启显示，可以观察训练过程，但会降低训练速度
-    # - True: 关闭显示（无头模式），训练速度更快，推荐用于正式训练
+    # - True:  无头模式（默认），训练速度快，推荐用于正式训练
+    # - False: 开启显示（运行时加 --headless 反而开启，这里强制无头）
     args.headless = True
-    
-    # 是否恢复训练：
-    # - False: 从头开始新训练
-    # - True: 从最近的检查点恢复训练，需要指定 load_run 和 checkpoint
-    args.resume = True
+
+    # 是否恢复训练（断点续训）：
+    # 方式一：命令行（推荐）
+    #   python legged_gym/scripts/train.py --task chitu --resume
+    #   python legged_gym/scripts/train.py --task chitu --resume --load_run Jun28_14-20-00_
+    #   python legged_gym/scripts/train.py --task chitu --resume --load_run Jun28_14-20-00_ --checkpoint 500
+    # 方式二：在下方取消注释（等效于命令行参数）
+    # args.resume = True
+    # args.load_run = 'Jun28_14-20-00_'   # logs/<experiment_name>/ 下的子目录名；不设则用最近一次 run
+    # args.checkpoint = 500               # model_500.pt；不设则用该 run 下最新的 model_*.pt
+    # 说明：
+    # - checkpoint 路径: logs/<experiment_name>/<run_name>/model_<iter>.pt
+    #   chitu 默认 experiment_name='rough_chitu'，chitu_amp 为 'chitu_amp_example'
+    # - 续训会从 checkpoint 的 iter 接着训到 max_iterations（默认 1500）
+    # - 续训会新建一个带时间戳的 log 目录，权重写入新目录（旧 run 保留）
     train(args)

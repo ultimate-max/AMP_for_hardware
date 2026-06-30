@@ -32,7 +32,7 @@ Paper: https://drive.google.com/file/d/1kFm79nMmrc0ZIiH0XO8_HV-fj73agheO/view?us
 2. Both env and config classes use inheritance.  
 3. Each non-zero reward scale specified in `cfg` will add a function with a corresponding name to the list of elements which will be summed to get the total reward. The AMP reward parameters are defined in `LeggedRobotCfgPPO`, as well as the path to the reference data.
 4. Tasks must be registered using `task_registry.register(name, EnvClass, EnvConfig, TrainConfig)`. This is done in `envs/__init__.py`, but can also be done from outside of this repository.
-5. Reference data can be found in the `datasets` folder.
+5. Reference data can be found in the `datasets` folder (see [`datasets/README.md`](datasets/README.md) for format, leg order, and validation).
 
 ### Usage ###
 1. Train:  
@@ -55,9 +55,37 @@ Paper: https://drive.google.com/file/d/1kFm79nMmrc0ZIiH0XO8_HV-fj73agheO/view?us
 ```python legged_gym/scripts/play.py --task=a1_amp```
     - By default the loaded policy is the last model of the last run of the experiment folder.
     - Other runs/model iteration can be selected by setting `load_run` and `checkpoint` in the train config.
-3. Record video of a trained policy
+3. Record video of a trained policy  
 ```python legged_gym/scripts/record_policy.py --task=a1_amp```
     - This saves a video of the in the base directory.
+4. **Visualize AMP mocap trajectories** (no trained policy; open-loop kinematic playback in Isaac Gym):  
+```bash
+# From repo root, with amp_hw env active. Default task: chitu_amp
+python legged_gym/scripts/play_motion.py \
+  --task=chitu_amp \
+  --motion_file=datasets/chitu/mocap_motions/trot_fwd_slow.txt \
+  --loop
+
+# List all trajectories loaded from config (no playback)
+python legged_gym/scripts/play_motion.py --task=chitu_amp --list
+
+# A1 example
+python legged_gym/scripts/play_motion.py \
+  --task=a1_amp \
+  --motion_file=datasets/a1/mocap_motions/trot0.txt \
+  --loop
+```
+    - **Purpose**: Check whether mocap JSON is valid and joint reordering matches the URDF before or during AMP training. Each frame writes root + joint state into the sim (gravity off); this is not PD-controlled locomotion.
+    - **Requires a viewer** — do not pass `--headless` for visual inspection.
+    - On startup, confirm `Isaac Gym DOF order` matches the robot URDF and `AMP joint reorder` is `a1` or `chitu` as appropriate.
+    - **Script-specific arguments** (in addition to Isaac Gym args like `--sim_device`):
+      - `--motion_file PATH`: Single `.txt` JSON file; if omitted, loads all files from the task config glob (`datasets/a1/mocap_motions/*` or `datasets/chitu/mocap_motions/*`).
+      - `--traj_idx N`: Index into the printed trajectory list (default `0`).
+      - `--loop`: Repeat playback when the clip ends.
+      - `--speed FLOAT`: Playback speed multiplier (default `1.0` = real-time).
+      - `--list`: Print loaded trajectories and exit.
+    - Close the viewer window or press **Q** to quit.
+    - Motion data format and leg-order mapping: see [`datasets/README.md`](datasets/README.md).
 
 ### Adding a new environment ###
 The base environment `legged_robot` implements a rough terrain locomotion task. The corresponding cfg does not specify a robot asset (URDF/ MJCF) and no reward scales. 

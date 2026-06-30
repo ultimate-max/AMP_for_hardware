@@ -162,6 +162,8 @@ def quaternion_slerp(q0, q1, fraction, spin=0, shortestpath=True):
     out[ones_mask] = q1[ones_mask]
 
     d = torch.sum(q0 * q1, dim=-1, keepdim=True)
+    # Dot products of unit quaternions can exceed 1.0 in float32; acos then returns NaN.
+    d = torch.clamp(d, -1.0, 1.0)
     dist_mask = (torch.abs(torch.abs(d) - 1.0) < _EPS).squeeze()
     out[dist_mask] = q0[dist_mask]
 

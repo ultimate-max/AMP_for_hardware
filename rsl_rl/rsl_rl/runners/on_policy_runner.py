@@ -135,11 +135,12 @@ class OnPolicyRunner:
             if self.log_dir is not None:
                 self.log(locals())
             if it % self.save_interval == 0:
-                self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(it)))
+                self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(it)), current_iter=it)
             ep_infos.clear()
         
         self.current_learning_iteration += num_learning_iterations
-        self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(self.current_learning_iteration)))
+        self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(self.current_learning_iteration)),
+                  current_iter=self.current_learning_iteration)
 
     def log(self, locs, width=80, pad=35):
         self.tot_timesteps += self.num_steps_per_env * self.env.num_envs
@@ -210,11 +211,11 @@ class OnPolicyRunner:
                                locs['num_learning_iterations'] - locs['it']):.1f}s\n""")
         print(log_string)
 
-    def save(self, path, infos=None):
+    def save(self, path, infos=None, current_iter=None):
         torch.save({
             'model_state_dict': self.alg.actor_critic.state_dict(),
             'optimizer_state_dict': self.alg.optimizer.state_dict(),
-            'iter': self.current_learning_iteration,
+            'iter': current_iter if current_iter is not None else self.current_learning_iteration,
             'infos': infos,
             }, path)
 
@@ -224,6 +225,12 @@ class OnPolicyRunner:
         if load_optimizer:
             self.alg.optimizer.load_state_dict(loaded_dict['optimizer_state_dict'])
         self.current_learning_iteration = loaded_dict['iter']
+        # 兼容旧 checkpoint：文件名 model_650.pt 但 iter 字段为 0
+        if self.current_learning_iteration == 0:
+            import re
+            match = re.search(r'model_(\d+)\.pt', path)
+            if match:
+                self.current_learning_iteration = int(match.group(1))
         return loaded_dict['infos']
 
     def get_inference_policy(self, device=None):

@@ -88,7 +88,7 @@ class ActorCritic(nn.Module):
         self.std = torch.tensor(std) if fixed_std else nn.Parameter(std)
         self.distribution = None
         # disable args validation for speedup
-        Normal.set_default_validate_args = False
+        Normal.set_default_validate_args(False)
         
         # seems that we get better performance without init
         # self.init_memory_weights(self.memory_a, 0.001, 0.)

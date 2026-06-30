@@ -40,6 +40,8 @@ class LeggedRobotCfg(BaseConfig):
         send_timeouts = True # send time out information to the algorithm
         episode_length_s = 20 # episode length in seconds
         reference_state_initialization = False # initialize state from reference data
+        amp_joint_reorder = 'a1'  # 'a1', 'chitu', or 'none'; see AMPLoader.reorder_joints
+        amp_use_sim_foot_pos = False  # True: AMP foot_pos from rigid bodies (Chitu)
 
     class terrain:
         mesh_type = 'trimesh' # "heightfield" # none, plane, heightfield or trimesh
@@ -117,6 +119,9 @@ class LeggedRobotCfg(BaseConfig):
         max_linear_velocity = 1000.
         armature = 0.
         thickness = 0.01
+        # 关节摩擦 [N·m]（PhysX DOF friction，作用于每个转动关节）
+        # 注意：Isaac Gym 仅一个 friction 字段，无法分别设静摩擦/动摩擦；步态仿真通常用动摩擦值
+        joint_friction = 0.
 
     class domain_rand:
         randomize_friction = True
